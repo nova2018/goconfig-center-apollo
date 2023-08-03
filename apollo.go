@@ -1,13 +1,17 @@
 package goconfig_center_apollo
 
 import (
+	"bytes"
+	"fmt"
+	"github.com/magiconair/properties"
 	"github.com/nova2018/goconfig"
 	gocenter "github.com/nova2018/goconfig-center"
 	"github.com/shima-park/agollo"
-	remote "github.com/shima-park/agollo/viper-remote"
 	"github.com/spf13/viper"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 )
 
 type apolloConfig struct {
@@ -17,7 +21,67 @@ type apolloConfig struct {
 	Endpoint              string `mapstructure:"endpoint"`
 	Namespace             string `mapstructure:"namespace"`
 	Cluster               string `mapstructure:"cluster"`
+	SLB                   bool   `mapstructure:"slb"`
 	AccessKey             string `mapstructure:"accessKey"`
+	IP                    string `mapstructure:"ip"`
+}
+
+type apolloDriver struct {
+	goconfig *goconfig.Config
+	cfg      *apolloConfig
+	client   agollo.Agollo
+	onChange chan struct{}
+	closed   bool
+	v        *viper.Viper
+	dirty    bool
+	lock     sync.Mutex
+	cLock    sync.RWMutex // lock for protected onChange channel
+}
+
+func (a *apolloDriver) GetViper() (*viper.Viper, error) {
+	if !a.dirty && a.v != nil {
+		return a.v, nil
+	}
+	a.lock.Lock()
+	defer a.lock.Unlock()
+	listNamespace := a.client.Options().PreloadNamespaces
+	v := viper.New()
+	for _, namespace := range listNamespace {
+		cfg := a.client.GetNameSpace(namespace)
+		cType := getConfigType(namespace)
+		v.SetConfigType(cType)
+		if cType == "properties" {
+			b, err := marshalProperties(cfg)
+			if err != nil {
+				return a.v, err
+			}
+			_ = v.ReadConfig(bytes.NewReader(b))
+		} else {
+			if content, ok := cfg["content"]; ok {
+				v.SetConfigType(cType)
+				_ = v.ReadConfig(bytes.NewBufferString(content.(string)))
+			}
+		}
+	}
+	a.v = v
+	a.dirty = false
+	return v, nil
+}
+
+func marshalProperties(c map[string]interface{}) ([]byte, error) {
+	p := properties.NewProperties()
+	for key, val := range c {
+		_, _, err := p.Set(key, fmt.Sprint(val))
+		if err != nil {
+			return nil, err
+		}
+	}
+	buff := bytes.NewBuffer(nil)
+	_, err := p.WriteComment(buff, "#", properties.UTF8)
+	if err != nil {
+		return nil, err
+	}
+	return buff.Bytes(), nil
 }
 
 func getConfigType(namespace string) string {
@@ -37,10 +101,38 @@ func getConfigType(namespace string) string {
 	return "properties"
 }
 
-type apolloDriver struct {
-	cfg      *apolloConfig
-	v        []*viper.Viper
-	goConfig *goconfig.Config
+func (a *apolloDriver) OnChange() <-chan struct{} {
+	if a.onChange == nil && !a.closed {
+		a.cLock.Lock()
+		a.onChange = make(chan struct{})
+		a.cLock.Unlock()
+		go func() {
+			errCh := a.client.Start()
+			watchCh := a.client.Watch()
+			go func(errCh <-chan *agollo.LongPollerError, watchCh <-chan *agollo.ApolloResponse) {
+				for !a.closed {
+					select {
+					case err := <-errCh:
+						fmt.Printf("%s apollo listen failure! err=%s\n", time.Now().Format("2006-01-02 15:04:05"), err.Err)
+					case w := <-watchCh:
+						if w.Changes.Len() > 0 {
+							// 广播通知
+							a.cLock.RLock()
+							if a.onChange != nil {
+								a.lock.Lock()
+								a.dirty = true
+								a.lock.Unlock()
+								a.onChange <- struct{}{}
+							}
+							a.cLock.RUnlock()
+						}
+					}
+				}
+				a.client.Stop()
+			}(errCh, watchCh)
+		}()
+	}
+	return a.onChange
 }
 
 func (a *apolloDriver) Name() string {
@@ -48,65 +140,61 @@ func (a *apolloDriver) Name() string {
 }
 
 func (a *apolloDriver) Watch() bool {
-	for _, x := range a.v {
-		a.goConfig.AddWatchViper(goconfig.WatchRemote, x, a.cfg.Prefix)
+	if !a.closed {
+		a.goconfig.AddCustomWatchViper(a, a.cfg.Prefix)
 	}
 	return true
 }
 
 func (a *apolloDriver) Unwatch() bool {
-	for _, x := range a.v {
-		a.goConfig.DelViper(x)
+	if !a.closed {
+		a.closed = true
+		a.cLock.Lock()
+		if a.onChange != nil {
+			close(a.onChange)
+			a.onChange = nil
+		}
+		a.cLock.Unlock()
+		a.goconfig.DelViper(a)
 	}
 	return true
 }
 
-func apolloFactory(config *goconfig.Config, cfg *viper.Viper) (gocenter.Driver, error) {
+func Factory(config *goconfig.Config, cfg *viper.Viper) (gocenter.Driver, error) {
 	var c apolloConfig
 	if err := cfg.Unmarshal(&c); err != nil {
 		return nil, err
 	}
 
-	remote.SetAppID(c.AppId)
 	listNamespace := strings.Split(c.Namespace, ",")
-	listV := make([]*viper.Viper, 0, len(listNamespace))
-	isHit := make(map[string]bool, len(listNamespace))
-	opts := []agollo.Option{
-		agollo.AutoFetchOnCacheMiss(),
+	listOpts := append([]agollo.Option{
+		agollo.PreloadNamespaces(listNamespace...),
 		agollo.FailTolerantOnBackupExists(),
-	}
+	})
 	if c.Cluster != "" {
-		opts = append(opts, agollo.Cluster(c.Cluster))
+		listOpts = append(listOpts, agollo.Cluster(c.Cluster))
 	}
 	if c.AccessKey != "" {
-		opts = append(opts, agollo.WithClientOptions(agollo.WithAccessKey(c.AccessKey)))
+		listOpts = append(listOpts, agollo.AccessKey(c.AccessKey))
 	}
-	remote.SetAgolloOptions(opts...)
-	for _, namespace := range listNamespace {
-		namespace = strings.TrimSpace(namespace)
-		if namespace == "" {
-			continue
-		}
-		if isHit[namespace] {
-			continue
-		}
-		isHit[namespace] = true
-		v := viper.New()
-		cType := getConfigType(namespace)
-		v.SetConfigType(cType)
-		if err := v.AddRemoteProvider("apollo", c.Endpoint, namespace); err != nil {
-			return nil, err
-		}
-		listV = append(listV, v)
+	if c.SLB {
+		listOpts = append(listOpts, agollo.EnableSLB(true))
+	}
+	if c.IP != "" {
+		listOpts = append(listOpts, agollo.WithClientOptions(agollo.WithIP(c.IP)))
+	}
+	a, err := agollo.New(c.Endpoint, c.AppId, listOpts...)
+	if err != nil {
+		return nil, err
 	}
 
 	return &apolloDriver{
+		goconfig: config,
+		client:   a,
 		cfg:      &c,
-		v:        listV,
-		goConfig: config,
 	}, nil
 }
 
 func init() {
-	gocenter.Register("apollo", apolloFactory)
+	gocenter.Register("apollo", Factory)
 }
