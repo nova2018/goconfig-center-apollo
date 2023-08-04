@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"github.com/magiconair/properties"
-	"github.com/nova2018/goconfig"
 	gocenter "github.com/nova2018/goconfig-center"
 	"github.com/shima-park/agollo"
 	"github.com/spf13/viper"
@@ -27,7 +26,6 @@ type apolloConfig struct {
 }
 
 type apolloDriver struct {
-	goconfig *goconfig.Config
 	cfg      *apolloConfig
 	client   agollo.Agollo
 	onChange chan struct{}
@@ -101,7 +99,7 @@ func getConfigType(namespace string) string {
 	return "properties"
 }
 
-func (a *apolloDriver) OnChange() <-chan struct{} {
+func (a *apolloDriver) OnUpdate() <-chan struct{} {
 	if a.onChange == nil && !a.closed {
 		a.cLock.Lock()
 		a.onChange = make(chan struct{})
@@ -139,14 +137,11 @@ func (a *apolloDriver) Name() string {
 	return a.cfg.Driver
 }
 
-func (a *apolloDriver) Watch() bool {
-	if !a.closed {
-		a.goconfig.AddCustomWatchViper(a, a.cfg.Prefix)
-	}
-	return true
+func (a *apolloDriver) Prefix() string {
+	return a.cfg.Prefix
 }
 
-func (a *apolloDriver) Unwatch() bool {
+func (a *apolloDriver) Close() error {
 	if !a.closed {
 		a.closed = true
 		a.cLock.Lock()
@@ -155,12 +150,11 @@ func (a *apolloDriver) Unwatch() bool {
 			a.onChange = nil
 		}
 		a.cLock.Unlock()
-		a.goconfig.DelViper(a)
 	}
-	return true
+	return nil
 }
 
-func Factory(config *goconfig.Config, cfg *viper.Viper) (gocenter.Driver, error) {
+func Factory(cfg *viper.Viper) (gocenter.Driver, error) {
 	var c apolloConfig
 	if err := cfg.Unmarshal(&c); err != nil {
 		return nil, err
@@ -189,9 +183,8 @@ func Factory(config *goconfig.Config, cfg *viper.Viper) (gocenter.Driver, error)
 	}
 
 	return &apolloDriver{
-		goconfig: config,
-		client:   a,
-		cfg:      &c,
+		client: a,
+		cfg:    &c,
 	}, nil
 }
 

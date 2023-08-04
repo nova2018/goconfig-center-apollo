@@ -3,7 +3,6 @@ package goconfig_center_apollo
 import (
 	"bytes"
 	"fmt"
-	"github.com/nova2018/goconfig"
 	gocenter "github.com/nova2018/goconfig-center"
 	"github.com/spf13/viper"
 	"testing"
@@ -27,11 +26,15 @@ namespace = "application"
 
 	fmt.Println("v.AllSettings:", v.AllSettings())
 
-	gconfig := goconfig.New()
-	gconfig.AddNoWatchViper(v)
-	gg := gocenter.New(gconfig)
-	gg.Watch()
-	gconfig.StartWait()
+	//gconfig := goconfig.New()
+	//gconfig.AddNoWatchViper(v)
+	//gg := gocenter.New(gconfig)
+	//gg.Watch()
+	//gconfig.StartWait()
+
+	center := gocenter.NewWithViper(v)
+	center.Watch()
+	gconfig := center.GetConfig()
 
 	gconfig.OnKeyChange("xxx", func() {
 		fmt.Println("key update!!!")
