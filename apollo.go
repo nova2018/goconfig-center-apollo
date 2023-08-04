@@ -154,7 +154,7 @@ func (a *apolloDriver) Close() error {
 	return nil
 }
 
-func Factory(cfg *viper.Viper) (gocenter.Driver, error) {
+func factory(cfg *viper.Viper) (gocenter.Driver, error) {
 	var c apolloConfig
 	if err := cfg.Unmarshal(&c); err != nil {
 		return nil, err
@@ -189,5 +189,5 @@ func Factory(cfg *viper.Viper) (gocenter.Driver, error) {
 }
 
 func init() {
-	gocenter.Register("apollo", Factory)
+	gocenter.Register("apollo", factory)
 }
