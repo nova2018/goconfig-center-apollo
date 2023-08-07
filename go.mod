@@ -4,7 +4,8 @@ go 1.20
 
 require (
 	github.com/magiconair/properties v1.8.7
-	github.com/nova2018/goconfig-center v1.0.0
+	github.com/nova2018/goconfig v1.0.2
+	github.com/nova2018/goconfig-center v1.0.1
 	github.com/shima-park/agollo v1.2.14
 	github.com/spf13/viper v1.16.0
 )
@@ -13,7 +14,6 @@ require (
 	github.com/fsnotify/fsnotify v1.6.0 // indirect
 	github.com/hashicorp/hcl v1.0.0 // indirect
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
-	github.com/nova2018/goconfig v1.0.1 // indirect
 	github.com/pelletier/go-toml/v2 v2.0.9 // indirect
 	github.com/spf13/afero v1.9.5 // indirect
 	github.com/spf13/cast v1.5.1 // indirect
