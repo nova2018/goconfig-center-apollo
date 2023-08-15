@@ -53,11 +53,11 @@ func (a *apolloDriver) GetViper() (*viper.Viper, error) {
 			if err != nil {
 				return a.v, err
 			}
-			_ = v.ReadConfig(bytes.NewReader(b))
+			_ = v.MergeConfig(bytes.NewReader(b))
 		} else {
 			if content, ok := cfg["content"]; ok {
 				v.SetConfigType(cType)
-				_ = v.ReadConfig(bytes.NewBufferString(content.(string)))
+				_ = v.MergeConfig(bytes.NewBufferString(content.(string)))
 			}
 		}
 	}
